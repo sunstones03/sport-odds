@@ -1,0 +1,17 @@
+{
+  "name": "sports",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --env-file=.env server.js",
+    "dev": "node --watch --env-file=.env server.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "express": "^4.22.3"
+  },
+  "type": "module",
+  "private": true
+}

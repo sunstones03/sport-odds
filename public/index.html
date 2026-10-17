@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Player Odds</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;700&family=Atkinson+Hyperlegible+Next:wght@400;600;700&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Player Odds</h1>
+    <span class="seg" id="format" role="group" aria-label="Odds format">
+      <button data-format="american">American</button><button data-format="decimal">Decimal</button><button data-format="implied">Implied %</button>
+    </span>
+  </header>
+
+  <nav id="views" role="tablist" aria-label="View">
+    <button data-view="viewer" role="tab">Viewer</button><button data-view="csv" role="tab">CSV</button>
+  </nav>
+
+  <nav id="bar">
+    <div class="field" data-field="league">
+      <button class="field-btn"><span class="label">League</span><span class="value">—</span></button>
+      <div class="panel"></div>
+    </div>
+    <div class="field" data-field="date">
+      <button class="field-btn"><span class="label">Date</span><span class="value">—</span></button>
+      <div class="panel"></div>
+    </div>
+    <div class="field" data-field="stat">
+      <button class="field-btn"><span class="label">Market</span><span class="value">—</span></button>
+      <div class="panel"></div>
+    </div>
+    <div class="field" data-field="books">
+      <button class="field-btn"><span class="label">Bookmakers</span><span class="value">—</span></button>
+      <div class="panel"></div>
+    </div>
+  </nav>
+
+  <div id="csv-tabs" hidden></div>
+
+  <div id="status"><p id="message"></p><span id="csv-action"></span><span id="updated"></span></div>
+  <div id="table-wrap"></div>
+  <div id="csv-view" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
