@@ -31,6 +31,11 @@ let csvError = null;
 let csvSeq = 0;
 let prevCsvCells = new Map();
 let csvPane = 'table'; // the open CSV's sub-tab: 'table' or 'books'
+// Presets: a CSV's markets and book ranking saved by name, to start a CSV for any day of
+// the same league: { name, league, stats, order, off, sort }. Names are unique per league.
+let presets = [];
+try { presets = JSON.parse(localStorage.getItem('csvPresets')) || []; } catch {}
+let presetsOpen = false; // the CSV tab shows the presets list instead of a CSV
 let dragBook = null; // book row being dragged in the ranking
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -202,7 +207,7 @@ async function load({ refresh = false } = {}) {
 // The league + day on screen: the viewer's selection, or the open CSV's.
 function streamTarget() {
   if (view === 'csv') {
-    const c = activeCsv();
+    const c = !presetsOpen && activeCsv();
     return c && { league: c.league, date: c.date };
   }
   return state.league && state.date ? { league: state.league, date: state.date } : null;
@@ -428,7 +433,8 @@ function renderUpdated() {
 }
 
 // ---------- CSV export ----------
-// Rows = players, columns per collected market by kind (CSV_COLS), full game only.
+// Rows = players, columns per collected market by kind (CSV_COLS, minus under for an
+// over-only market), full game only.
 // Each cell takes both sides from one book: the first ticked book in the ranking that
 // prices it, preferring an open price; if every pricing book is closed, the first closed one.
 
@@ -438,7 +444,7 @@ const csvId = (league, date) => `${league}|${date}`;
 const CSV_COLS = { ou: ['line', 'over', 'under'], yn: ['yes', 'no'], sp: ['line', 'odds'], ml: ['odds'] };
 
 // A market's columns: the ranked book's, then the same again from the consensus.
-const marketCols = (kind) => [...CSV_COLS[kind], ...CSV_COLS[kind].map((col) => `consensus_${col}`)];
+const marketCols = (m) => [...m.cols, ...m.cols.map((col) => `consensus_${col}`)];
 
 // Market kind from its name: the server suffixes every bet type except over/under.
 function marketKind(stat) {
@@ -450,6 +456,38 @@ function marketKind(stat) {
 
 function saveCsvs() {
   try { localStorage.setItem('csvs', JSON.stringify({ list: csvs, active: activeCsvId })); } catch {}
+}
+
+function savePresets() {
+  try { localStorage.setItem('csvPresets', JSON.stringify(presets)); } catch {}
+}
+
+// Saves the CSV's markets, book order, unticked books and sort as a preset for its league.
+function savePreset(c) {
+  const more = c.stats.length > 3 ? ` +${c.stats.length - 3}` : '';
+  const name = prompt(`Save this CSV's markets and book order as a ${c.league} preset.\nName:`, c.stats.slice(0, 3).join(', ') + more)?.trim();
+  if (!name) return;
+  const old = presets.find((p) => p.league === c.league && p.name === name);
+  if (old && !confirm(`Replace the ${c.league} preset "${name}"?`)) return;
+  presets = [...presets.filter((p) => p !== old), { name, league: c.league, stats: [...c.stats], order: c.order && [...c.order], off: [...c.off], sort: c.sort ?? null }];
+  savePresets();
+}
+
+// Starts the viewer's league + day CSV from a preset and opens it. An existing CSV for
+// that day has its markets and books replaced (asks first). Returns false if cancelled.
+function applyPreset(p) {
+  let c = viewerCsv();
+  if (c && !confirm(`Replace the markets and book order of the ${c.league} ${fmtDate(c.date)} CSV with the preset "${p.name}"?`)) return false;
+  if (!c) csvs.push((c = { id: csvId(state.league, state.date), league: state.league, date: state.date }));
+  Object.assign(c, { stats: [...p.stats], order: p.order && [...p.order], off: [...p.off], sort: p.sort });
+  activeCsvId = c.id;
+  saveCsvs();
+  presetsOpen = false;
+  view = 'csv';
+  closePanels();
+  writeUrl(true);
+  reload();
+  return true;
 }
 
 function activeCsv() {
@@ -546,7 +584,12 @@ function csvTable(c, data) {
   const order = c.order
     ? [...c.order.filter((b) => cov.has(b)), ...byCoverage.filter((b) => !c.order.includes(b))]
     : byCoverage;
-  const markets = c.stats.map((stat) => ({ stat, kind: marketKind(stat), offered: data.available.includes(stat) }));
+  const markets = c.stats.map((stat) => {
+    const kind = marketKind(stat);
+    // An over-only market (no book or consensus prices an under) gets no under columns.
+    const cols = CSV_COLS[kind].filter((col) => col !== 'under' || !data.noUnder.includes(stat));
+    return { stat, kind, cols, offered: data.available.includes(stat) };
+  });
   const used = new Map(order.map((b) => [b, 0]));
   const rows = players.map((r) => ({
     ...r,
@@ -581,24 +624,25 @@ function sortRows(t, sort) {
 
 // One row of the file: the player, then each market's book and consensus values.
 function rowValues(r, t) {
-  return [r.name, ...r.picks.flatMap((p, i) => [...pickValues(p, t.markets[i].kind), ...pickValues(r.cons[i], t.markets[i].kind)])];
+  return [r.name, ...r.picks.flatMap((p, i) => [...pickValues(p, t.markets[i]), ...pickValues(r.cons[i], t.markets[i])])];
 }
 
 function csvHeader(t) {
-  return ['player', ...t.markets.flatMap((m) => marketCols(m.kind).map((col) => `${m.stat}_${col}`))];
+  return ['player', ...t.markets.flatMap((m) => marketCols(m).map((col) => `${m.stat}_${col}`))];
 }
 
-// One cell's values, one per CSV_COLS[kind] column.
-function pickValues(p, kind) {
-  if (!p) return CSV_COLS[kind].map(() => '');
+// One cell's values, one per column of the market (m.cols).
+function pickValues(p, m) {
+  if (!p) return m.cols.map(() => '');
   const odds = oddsValue(p.q.a?.odds);
-  if (kind === 'ml') return [odds];
-  if (kind === 'yn') return [odds, oddsValue(p.q.b?.odds)];
-  if (kind === 'sp') {
+  let v;
+  if (m.kind === 'ml') v = { odds };
+  else if (m.kind === 'yn') v = { yes: odds, no: oddsValue(p.q.b?.odds) };
+  else if (m.kind === 'sp') {
     const n = parseFloat(p.q.a?.line);
-    return [Number.isNaN(n) ? '' : String(n), odds]; // '+1.5' -> '1.5', like odds have no '+'
-  }
-  return [String(p.q.a?.line ?? p.q.b?.line ?? ''), odds, oddsValue(p.q.b?.odds)];
+    v = { line: Number.isNaN(n) ? '' : String(n), odds }; // '+1.5' -> '1.5', like odds have no '+'
+  } else v = { line: String(p.q.a?.line ?? p.q.b?.line ?? ''), over: odds, under: oddsValue(p.q.b?.odds) };
+  return m.cols.map((col) => v[col]);
 }
 
 const csvField = (v) => (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
@@ -620,27 +664,46 @@ function exportCsv() {
 }
 
 // "Add to CSV" next to the viewer's status line.
+// "Add to CSV" next to the viewer's status line, and "New CSV from preset" once the
+// league + day is loaded and the league has presets.
 function renderCsvAction() {
   const el = $('#csv-action');
-  if (!(day?.table && state.stat && !error && !loading)) {
-    el.innerHTML = '';
-    return;
+  const ready = day && !error && !loading;
+  let html = '';
+  if (ready && day.table && state.stat) {
+    html = viewerCsv()?.stats.includes(state.stat)
+      ? `<span class="in-csv">In the ${esc(state.league)} ${esc(fmtDate(state.date))} CSV</span><button class="btn" data-act="csv-remove">Remove from CSV</button>`
+      : '<button class="btn primary" data-act="csv-add">Add to CSV</button>';
   }
-  el.innerHTML = viewerCsv()?.stats.includes(state.stat)
-    ? `<span class="in-csv">In the ${esc(state.league)} ${esc(fmtDate(state.date))} CSV</span><button class="btn" data-act="csv-remove">Remove from CSV</button>`
-    : '<button class="btn primary" data-act="csv-add">Add to CSV</button>';
+  const mine = ready ? presets.filter((p) => p.league === state.league).sort((a, b) => a.name.localeCompare(b.name)) : [];
+  if (mine.length) {
+    html += `<select class="btn" data-act="preset" aria-label="New CSV for ${esc(fmtDate(state.date))} from a preset">` +
+      '<option value="">New CSV from preset…</option>' +
+      mine.map((p) => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('') + '</select>';
+  }
+  el.innerHTML = html;
 }
 
 function renderCsv(flash) {
   const c = activeCsv();
   activeCsvId = c?.id ?? null;
   $('#csv-tabs').innerHTML = csvs
-    .map((x) => `<span class="ctab${x === c ? ' on' : ''}">` +
+    .map((x) => `<span class="ctab${x === c && !presetsOpen ? ' on' : ''}">` +
       `<button data-csv="${esc(x.id)}">${esc(x.league)} · ${esc(fmtDate(x.date))} <span class="n">${x.stats.length}</span></button>` +
       `<button data-close="${esc(x.id)}" title="Delete this CSV" aria-label="Delete this CSV">×</button></span>`)
-    .join('');
+    .join('') +
+    `<span class="ctab presets${presetsOpen ? ' on' : ''}"><button data-presets>Presets <span class="n">${presets.length}</span></button></span>`;
   const msg = $('#message');
   const body = $('#csv-view');
+  if (presetsOpen) {
+    msg.classList.remove('error');
+    msg.textContent = presets.length
+      ? 'To use a preset: in the viewer, pick its league and a date, then "New CSV from preset".'
+      : 'No presets yet. Open a CSV and click Save as preset.';
+    body.innerHTML = presetsHtml();
+    renderUpdated();
+    return;
+  }
   msg.classList.toggle('error', !!csvError);
   if (c && (csvLoading || leaguesLoading) && !csvError) {
     msg.textContent = '';
@@ -673,7 +736,8 @@ function renderCsv(flash) {
     .map((m) => `<span class="chip${m.offered ? '' : ' gone'}"${m.offered ? '' : ' title="Not offered today"'}>${esc(m.stat)}` +
       `<button data-act="remove" data-stat="${esc(m.stat)}" title="Remove from CSV" aria-label="Remove ${esc(m.stat)}">×</button></span>`)
     .join('') + '</div>';
-  const bar = `<div class="csv-bar">${panes}${chips}<button class="btn primary" data-act="export">Export CSV</button></div>`;
+  const bar = `<div class="csv-bar">${panes}${chips}<span class="acts"><button class="btn" data-act="save-preset">Save as preset</button>` +
+    '<button class="btn primary" data-act="export">Export CSV</button></span></div>';
 
   // Keep the scroll position across live refreshes, which rebuild this.
   const wrap = $('.csv-wrap', body);
@@ -682,11 +746,29 @@ function renderCsv(flash) {
   if (scroll && $('.csv-wrap', body)) Object.assign($('.csv-wrap', body), { scrollTop: scroll.top, scrollLeft: scroll.left });
 }
 
+function presetsHtml() {
+  if (!presets.length) return '';
+  const rows = [...presets]
+    .sort((a, b) => a.league.localeCompare(b.league) || a.name.localeCompare(b.name))
+    .map((p) => {
+      const books = p.order
+        ? p.order.slice(0, 4).join(', ') + (p.order.length > 4 ? ` +${p.order.length - 4}` : '')
+        : 'Most prices first';
+      const off = p.off.length ? `; unticked: ${p.off.join(', ')}` : '';
+      return `<tr><td class="player">${esc(p.name)}</td><td>${esc(p.league)}</td>` +
+        `<td class="wrap">${esc(p.stats.join(', '))}</td><td class="wrap">${esc(books + off)}</td>` +
+        `<td><button class="btn" data-act="preset-delete" data-league="${esc(p.league)}" data-name="${esc(p.name)}">Delete</button></td></tr>`;
+    })
+    .join('');
+  return '<div class="csv-wrap"><table class="presets"><thead><tr><th class="player">Name</th><th>League</th><th>Markets</th><th>Book order</th><th></th></tr></thead>' +
+    `<tbody>${rows}</tbody></table></div>`;
+}
+
 // The preview: exactly the file's columns and header names.
 function csvTableHtml(t, flash) {
   const header = csvHeader(t);
   const ends = new Set(); // index of each market's last column
-  t.markets.reduce((i, m) => (ends.add(i + marketCols(m.kind).length - 1), i + marketCols(m.kind).length), 1);
+  t.markets.reduce((i, m) => (ends.add(i + marketCols(m).length - 1), i + marketCols(m).length), 1);
   const last = (i) => ends.has(i);
   // Header names are mono at ≈ 9px per character; wide enough that none is cut off,
   // with room for the sort arrow.
@@ -706,8 +788,8 @@ function csvTableHtml(t, flash) {
   for (const r of t.rows) {
     html += `<tr><td class="player">${esc(r.name)}</td>`;
     // One pick's cells; grp marks the market's last column.
-    const cells = (p, kind, k, grp) => {
-      const vals = pickValues(p, kind);
+    const cells = (p, m, k, grp) => {
+      const vals = pickValues(p, m);
       const sig = JSON.stringify([vals, p?.open]);
       next.set(k, sig);
       const changed = flash && prevCsvCells.has(k) && prevCsvCells.get(k) !== sig;
@@ -716,8 +798,8 @@ function csvTableHtml(t, flash) {
       return vals.map((v, j) => `<td class="${cls}${grp && j === vals.length - 1 ? ' grp' : ''}"${title}>${v === '' ? '<span class="none">—</span>' : esc(v)}</td>`).join('');
     };
     r.picks.forEach((p, i) => {
-      const { stat, kind } = t.markets[i];
-      html += cells(p, kind, `${r.playerID}|${stat}`, false) + cells(r.cons[i], kind, `${r.playerID}|${stat}|consensus`, true);
+      const m = t.markets[i];
+      html += cells(p, m, `${r.playerID}|${m.stat}`, false) + cells(r.cons[i], m, `${r.playerID}|${m.stat}|consensus`, true);
     });
     html += '<td class="filler"></td></tr>';
   }
@@ -935,7 +1017,18 @@ $('#csv-action').addEventListener('click', (e) => {
   render();
 });
 
+$('#csv-action').addEventListener('change', (e) => {
+  const p = presets.find((x) => x.league === state.league && x.name === e.target.value);
+  if (!p || !applyPreset(p)) renderCsvAction(); // cancelled: reset the menu
+});
+
 $('#csv-tabs').addEventListener('click', (e) => {
+  if (e.target.closest('[data-presets]')) {
+    if (presetsOpen) return;
+    presetsOpen = true;
+    connectStream();
+    return render();
+  }
   const close = e.target.closest('[data-close]')?.dataset.close;
   const c = csvs.find((x) => x.id === close);
   if (c) {
@@ -946,7 +1039,8 @@ $('#csv-tabs').addEventListener('click', (e) => {
     return;
   }
   const id = e.target.closest('[data-csv]')?.dataset.csv;
-  if (id && id !== activeCsv()?.id) {
+  if (id && (presetsOpen || id !== activeCsv()?.id)) {
+    presetsOpen = false;
     activeCsvId = id;
     saveCsvs();
     loadCsv();
@@ -954,6 +1048,16 @@ $('#csv-tabs').addEventListener('click', (e) => {
 });
 
 $('#csv-view').addEventListener('click', (e) => {
+  const del = e.target.closest('[data-act="preset-delete"]');
+  if (del) {
+    const p = presets.find((x) => x.league === del.dataset.league && x.name === del.dataset.name);
+    if (p && confirm(`Delete the ${p.league} preset "${p.name}"?`)) {
+      presets = presets.filter((x) => x !== p);
+      savePresets();
+      render();
+    }
+    return;
+  }
   const c = activeCsv();
   if (!c || !csvData) return;
   const pane = e.target.closest('[data-pane]')?.dataset.pane;
@@ -980,7 +1084,8 @@ $('#csv-view').addEventListener('click', (e) => {
     c.order = null;
     c.off = [];
     saveCsvs();
-  } else return;
+  } else if (act === 'save-preset') savePreset(c);
+  else return;
   render();
 });
 

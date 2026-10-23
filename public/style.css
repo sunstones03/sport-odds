@@ -72,7 +72,7 @@ body {
   color: var(--ink);
   font: var(--fs-body)/1.45 var(--ui);
 }
-button, input { font: inherit; color: inherit; }
+button, input, select { font: inherit; color: inherit; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
 /* header */
@@ -369,7 +369,10 @@ td.chg { animation: flash 2.5s ease-out; }
 .ctab.on .n { color: var(--surface); }
 
 .csv-bar { display: flex; align-items: center; gap: 20px; margin-bottom: 10px; }
-.csv-bar > .btn { margin-left: auto; padding: 5px 16px; font-size: var(--fs-body); }
+.csv-bar .acts { margin-left: auto; display: flex; gap: 10px; }
+.csv-bar .acts .btn { padding: 5px 16px; font-size: var(--fs-body); }
+.ctab.presets { margin-left: auto; }
+#csv-action select { font-size: var(--fs-sm); }
 .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .chips .lbl { color: var(--muted); font-size: var(--fs-sm); margin-right: 4px; }
 .chip {
@@ -394,6 +397,8 @@ td.chg { animation: flash 2.5s ease-out; }
   overflow: auto;
 }
 .csv-wrap:empty { display: none; }
+table.presets td { vertical-align: middle; }
+table.presets td.wrap { white-space: normal; max-width: 420px; }
 table.csv th.grp, table.csv td.grp { border-right: 2px solid var(--rule-strong); }
 table.csv thead th { font-family: var(--num); font-size: var(--fs-sm); padding: 0; }
 /* sortable headers: the whole cell is the button */

@@ -315,10 +315,14 @@ const KINDS = ['ou', 'yn', 'ml', 'sp'];
 function buildTable(events, statID, books) {
   const games = [];
   let gamesWithoutStat = 0;
+  let ou = false;
+  let under = false; // any book or the consensus prices an under, selected or not
   for (const e of events) {
     const rows = new Map(); // playerID -> row
     for (const o of e.odds) {
       if (o.statID !== statID || !SIDE[o.sideID]) continue;
+      if (o.betTypeID === 'ou') ou = true;
+      if (o.sideID === 'under' && (o.consensus.odds != null || Object.values(o.byBookmaker).some((b) => b.odds != null))) under = true;
       const key = o.playerID;
       if (!rows.has(key)) {
         const p = e.players[o.playerID] || { name: o.playerID };
@@ -357,7 +361,10 @@ function buildTable(events, statID, books) {
     games.push({ eventID: e.eventID, startsAt: e.startsAt, status: e.status, away: e.away, home: e.home, rows: sorted });
   }
   games.sort((a, b) => (a.startsAt || '').localeCompare(b.startsAt || '') || a.eventID.localeCompare(b.eventID));
-  return { books, games, gamesWithoutStat };
+  // Over-only market (e.g. EPL assists): no under to show. SGO still prices a fair under; drop it.
+  const noUnder = ou && !under;
+  if (noUnder) for (const g of games) for (const r of g.rows) delete r.fair.b;
+  return { books, games, gamesWithoutStat, noUnder };
 }
 
 // CSV data: one row per player, with every book's price for each
@@ -365,11 +372,14 @@ function buildTable(events, statID, books) {
 function buildCsv(events, statIDs, summaries) {
   const players = new Map(); // playerID -> row
   const books = new Set();
+  const noUnder = []; // over-only stats: their CSV columns drop under
   for (const statID of statIDs) {
     const summary = summaries.find((s) => s.statID === statID);
     if (!summary) continue;
     summary.books.forEach((b) => books.add(b));
-    for (const g of buildTable(events, statID, summary.books).games) {
+    const table = buildTable(events, statID, summary.books);
+    if (table.noUnder) noUnder.push(statID);
+    for (const g of table.games) {
       for (const r of g.rows) {
         if (!players.has(r.playerID)) {
           players.set(r.playerID, { playerID: r.playerID, name: r.name, team: r.team, side: r.side, startsAt: g.startsAt, eventID: g.eventID, cells: {} });
@@ -383,7 +393,7 @@ function buildCsv(events, statIDs, summaries) {
     (a, b) => (a.startsAt || '').localeCompare(b.startsAt || '') || a.eventID.localeCompare(b.eventID) ||
       order[a.side] - order[b.side] || a.name.localeCompare(b.name),
   );
-  return { books: [...books].sort(), rows };
+  return { books: [...books].sort(), rows, noUnder };
 }
 
 // --- routes ---
