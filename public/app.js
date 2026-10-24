@@ -318,7 +318,7 @@ function renderMessage() {
   else if (!state.league) msg = 'Choose a league to see its games.';
   else if (!state.date) msg = 'Choose a date.';
   else if (!day) msg = '';
-  else if (!day.gameCount) msg = `No ${state.league} games on ${fmtDate(state.date)}. Try another date.`;
+  else if (!day.gameCount) msg = `No upcoming ${state.league} games on ${fmtDate(state.date)}. Try another date.`;
   else if (!day.stats.length) msg = `${games(day.gameCount)}, but no player markets yet. Books usually post props about a day before.`;
   else if (!state.stat) msg = `${games(day.gameCount)}. Choose a market.`;
   else if (availableBooks().length && !selectedBooks().length) msg = 'Select at least one bookmaker.';
@@ -436,7 +436,8 @@ function renderUpdated() {
 // Rows = players, columns per collected market by kind (CSV_COLS, minus under for an
 // over-only market), full game only.
 // Each cell takes both sides from one book: the first ticked book in the ranking that
-// prices it, preferring an open price; if every pricing book is closed, the first closed one.
+// prices it (both over and under, unless the market is over-only), preferring an open price;
+// if every pricing book is closed, the first closed one.
 
 const csvId = (league, date) => `${league}|${date}`;
 
@@ -552,18 +553,23 @@ async function loadCsv({ refresh = false } = {}) {
 
 const priced = (q) => ['a', 'b'].some((s) => q?.[s]?.odds != null);
 
+// A price the CSV can use. In an O/U market that has unders, a price without an under
+// doesn't count (user decision 2026-10-23), e.g. FanDuel's over-only NHL points or a
+// book's "2+ steals": the cell takes the next book with both sides, or stays blank.
+const usable = (q, needUnder) => priced(q) && (!needUnder || (q.a?.odds != null && q.b?.odds != null));
+
 // The consensus as a pick, so it fills its columns the same way a book does.
-function consensusPick(cell) {
+function consensusPick(cell, needUnder) {
   const q = cell?.consensus;
-  if (!priced(q)) return null;
+  if (!usable(q, needUnder)) return null;
   return { book: 'consensus', q, kind: cell.kind, open: ['a', 'b'].every((s) => q[s]?.odds == null || q[s].available) };
 }
 
-function pickBook(cell, order, off) {
+function pickBook(cell, order, off, needUnder) {
   let closed = null;
   for (const book of order) {
     const q = cell.books[book];
-    if (off.includes(book) || !priced(q)) continue;
+    if (off.includes(book) || !usable(q, needUnder)) continue;
     const open = ['a', 'b'].every((s) => q[s]?.odds == null || q[s].available);
     if (open) return { book, q, open, kind: cell.kind };
     closed ||= { book, q, open, kind: cell.kind };
@@ -573,11 +579,16 @@ function pickBook(cell, order, off) {
 
 // Everything the preview and the file need, from the CSV's picks and the latest data.
 function csvTable(c, data) {
+  const needUnder = (s) => marketKind(s) === 'ou' && !data.noUnder.includes(s);
+  // Players with at least one usable price (any book, ticked or not, or the consensus).
+  const players = data.rows.filter((r) => c.stats.some((s) => {
+    const cell = r.cells[s];
+    return cell && (usable(cell.consensus, needUnder(s)) || Object.values(cell.books).some((q) => usable(q, needUnder(s))));
+  }));
   const cov = new Map(data.books.map((b) => [b, 0]));
-  const players = data.rows.filter((r) => c.stats.some((s) => r.cells[s]));
   for (const r of players) {
     for (const s of c.stats) {
-      for (const [b, q] of Object.entries(r.cells[s]?.books || {})) if (priced(q)) cov.set(b, cov.get(b) + 1);
+      for (const [b, q] of Object.entries(r.cells[s]?.books || {})) if (usable(q, needUnder(s))) cov.set(b, cov.get(b) + 1);
     }
   }
   const byCoverage = [...data.books].sort((a, b) => cov.get(b) - cov.get(a) || a.localeCompare(b));
@@ -594,11 +605,11 @@ function csvTable(c, data) {
   const rows = players.map((r) => ({
     ...r,
     picks: markets.map((m) => {
-      const p = r.cells[m.stat] && pickBook(r.cells[m.stat], order, c.off);
+      const p = r.cells[m.stat] && pickBook(r.cells[m.stat], order, c.off, needUnder(m.stat));
       if (p) used.set(p.book, used.get(p.book) + 1);
       return p;
     }),
-    cons: markets.map((m) => consensusPick(r.cells[m.stat])),
+    cons: markets.map((m) => consensusPick(r.cells[m.stat], needUnder(m.stat))),
   }));
   const t = { order, cov, used, markets, rows, sort: null };
   sortRows(t, c.sort);

@@ -88,8 +88,10 @@ async function pagedEvents(params) {
 }
 
 async function fetchDay(m) {
-  // cancelled=false also means cancelled games aren't billed as entities.
-  const day = { leagueID: m.leagueID, startsAfter: m.from, startsBefore: m.to, cancelled: false };
+  // cancelled=false and started=false also mean those games aren't billed as entities.
+  // Only upcoming games are shown (user decision 2026-10-23): started=false drops live and
+  // finished ones. SGO's own flag is used rather than startsAt, so a late tip-off stays listed.
+  const day = { leagueID: m.leagueID, startsAfter: m.from, startsBefore: m.to, cancelled: false, started: false };
   let events;
   if (!UNCAPPED_TIERS.has(tier)) {
     events = await pagedEvents(day); // one call: listing first would double a capped plan's entities
@@ -107,8 +109,8 @@ async function fetchDay(m) {
     const fetched = await Promise.all(batches.map((ids) => pagedEvents({ eventIDs: ids.join(',') })));
     events = [...fetched.flat(), ...m.list.noOdds];
   }
-  // A listed game may since have been cancelled or moved to another day.
-  events = events.filter((e) => !e.status?.cancelled && e.status?.startsAt >= m.from && e.status?.startsAt < m.to);
+  // A listed game may since have been cancelled, started or moved to another day.
+  events = events.filter((e) => !e.status?.cancelled && !e.status?.started && e.status?.startsAt >= m.from && e.status?.startsAt < m.to);
   events.sort((a, b) => a.eventID.localeCompare(b.eventID)); // stable order for signature()
   return { fetchedAt: new Date().toISOString(), events: dropMirroredYesNo(events.map(slimEvent)) };
 }
